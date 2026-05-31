@@ -551,6 +551,11 @@ def serve_command(args):
         )
         sys.exit(1)
 
+    # TLS requires a specific bind IP (cert SAN can't cover a wildcard).
+    from vllm_mlx.runtime.tls import require_bindable_ip
+
+    require_bindable_ip(args.host, args.self_signed_days)
+
     # Auto-detect parser config from model name when not explicitly set.
     # --no-tool-call-parser / --no-reasoning-parser are escape hatches
     # (SOP §10): if the user opts out, do NOT let the AliasProfile auto-
@@ -1088,8 +1093,9 @@ def serve_command(args):
     # curl immediately and get connection-refused while shaders compile.
     print()
     host_display = "localhost" if args.host == "0.0.0.0" else args.host
+    scheme = "https" if args.self_signed_days > 0 else "http"
     print(
-        f"  Starting server on http://{host_display}:{args.port} (warming up — this can take a few seconds)"
+        f"  Starting server on {scheme}://{host_display}:{args.port} (warming up — this can take a few seconds)"
     )
     from vllm_mlx._version_check import print_staleness_warning_if_any
 
@@ -1104,10 +1110,14 @@ def serve_command(args):
     _cfg.bind_host = host_display
     _cfg.bind_port = args.port
 
-    uvicorn.run(
+    # tls.run handles HTTPS (in-memory cert) when --self-signed-days > 0.
+    from vllm_mlx.runtime import tls
+
+    tls.run(
         app,
         host=args.host,
         port=args.port,
+        cert_days=args.self_signed_days,
         log_level=uvicorn_log_level,
         timeout_keep_alive=30,
     )
@@ -3954,6 +3964,13 @@ Examples:
         type=str,
         default=None,
         help="Pre-load an embedding model at startup (e.g. mlx-community/embeddinggemma-300m-6bit)",
+    )
+    serve_parser.add_argument(
+        "--self-signed-days",
+        type=int,
+        default=0,
+        help="0 (default) serves plain HTTP. >0 serves HTTPS with an ephemeral "
+        "in-memory self-signed cert (never persisted) valid that many days.",
     )
     # Bench command
     bench_parser = subparsers.add_parser("bench", help="Run benchmark")

@@ -149,6 +149,87 @@ print(response.choices[0].message.content)
 
 ---
 
+## Run on macOS (this fork + TLS + auth)
+
+This fork (`s3rj1k/Rapid-MLX`) adds **ephemeral in-memory TLS** via
+`--self-signed-days`: a self-signed cert minted in memory at startup and
+never written to disk. It's not on PyPI, so install from the fork. The
+setup below always runs with **TLS + API-key auth** enabled.
+
+**1. Install Python and create a venv**
+
+```bash
+brew install python
+export PATH="$(brew --prefix python)/libexec/bin:$PATH"   # put brew's python/pip first
+python -m venv ~/rapid-mlx
+source ~/rapid-mlx/bin/activate
+pip install --upgrade pip
+```
+
+**2. Install this fork's `tls` branch** into the venv (instead of `pip install rapid-mlx`):
+
+```bash
+pip install "git+https://github.com/s3rj1k/Rapid-MLX.git@tls"
+```
+
+> Editable checkout instead: `git clone -b tls https://github.com/s3rj1k/Rapid-MLX.git && cd Rapid-MLX && pip install -e .`
+
+**3. Serve over HTTPS with auth** (Qwen3.6-35B, coding-agent tuned, 4-bit KV for long context):
+
+```bash
+rapid-mlx serve qwen3.6-35b-ud \
+  --host 127.0.0.1 --port 8000 \
+  --self-signed-days 365 \
+  --api-key "change-me" \
+  --reasoning-parser qwen3 \
+  --kv-cache-quantization \
+  --kv-cache-quantization-bits 4 \
+  --cache-memory-mb 4096 \
+  --pin-system-prompt \
+  --gpu-memory-utilization 0.90 \
+  --max-num-seqs 4 \
+  --max-tokens 12288 \
+  --default-temperature 0.6 \
+  --default-top-p 0.95 \
+  --default-top-k 20 \
+  --default-min-p 0.0 \
+  --default-presence-penalty 0.0 \
+  --default-repetition-penalty 1.0
+# Ready: https://127.0.0.1:8000/v1
+```
+
+> **TLS requires a specific bind IP.** With `--self-signed-days > 0`, a
+> wildcard `--host 0.0.0.0` (or `::`) is rejected and the server exits
+> early — a cert can't cover a wildcard. Use a concrete IP: `127.0.0.1`
+> for local-only, or your LAN IP (e.g. `192.168.1.50`) to reach it from
+> other machines. The cert's SANs are the bind IP, always
+> `rapid-mlx.local`, plus `localhost` when binding loopback.
+
+**4. Connect.** Send the API key as a Bearer token; the cert is self-signed, so skip verification:
+
+```bash
+curl -k https://127.0.0.1:8000/v1/models -H "Authorization: Bearer change-me"
+```
+
+```python
+import httpx
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://127.0.0.1:8000/v1",
+    api_key="change-me",                        # must match --api-key
+    http_client=httpx.Client(verify=False),     # cert is self-signed
+)
+```
+
+> Auth is a single shared key: OpenAI routes check `Authorization: Bearer <key>`,
+> Anthropic `/v1/messages` also accepts `x-api-key`. A wrong/missing key → HTTP 401.
+> Optional: add `--rate-limit 120` (requests/min per client).
+
+> Prefer plain HTTP / no auth? Omit `--self-signed-days` (default `0`, then `--host 0.0.0.0` is allowed) and/or `--api-key`.
+
+---
+
 ## Works With
 
 ### Agent Harnesses (MHI-tested)

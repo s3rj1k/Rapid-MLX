@@ -352,8 +352,9 @@ async def lifespan(app: FastAPI):
     # weren't stashed (e.g. embedded usage where uvicorn is owned elsewhere),
     # fall back silently.
     if _cfg.bind_host and _cfg.bind_port:
-        print(f"  Ready: http://{_cfg.bind_host}:{_cfg.bind_port}/v1")
-        print(f"  Docs:  http://{_cfg.bind_host}:{_cfg.bind_port}/docs")
+        _scheme = getattr(_cfg, "bind_scheme", "http")
+        print(f"  Ready: {_scheme}://{_cfg.bind_host}:{_cfg.bind_port}/v1")
+        print(f"  Docs:  {_scheme}://{_cfg.bind_host}:{_cfg.bind_port}/docs")
         print()
 
     yield
@@ -1221,9 +1222,21 @@ Examples:
         default=None,
         help="API key for cloud model (overrides environment variable).",
     )
+    parser.add_argument(
+        "--self-signed-days",
+        type=int,
+        default=0,
+        help="0 (default) serves plain HTTP. >0 serves HTTPS with an ephemeral "
+        "in-memory self-signed cert (never persisted) valid that many days.",
+    )
 
     args = parser.parse_args()
     uvicorn_log_level = configure_logging(args.log_level)
+
+    # TLS requires a specific bind IP (cert SAN can't cover a wildcard).
+    from .runtime.tls import require_bindable_ip
+
+    require_bindable_ip(args.host, args.self_signed_days)
 
     # Set global configuration
     global _api_key, _default_timeout, _rate_limiter
@@ -1370,8 +1383,20 @@ Examples:
         no_openai_harmony_streaming=getattr(args, "no_openai_harmony_streaming", False),
     )
 
-    # Start server
-    uvicorn.run(app, host=args.host, port=args.port, log_level=uvicorn_log_level)
+    # Start server. tls.run enables in-memory HTTPS when --self-signed-days > 0.
+    _cfg = get_config()
+    _cfg.bind_host = "localhost" if args.host == "0.0.0.0" else args.host
+    _cfg.bind_port = args.port
+
+    from .runtime import tls
+
+    tls.run(
+        app,
+        host=args.host,
+        port=args.port,
+        cert_days=args.self_signed_days,
+        log_level=uvicorn_log_level,
+    )
 
 
 if __name__ == "__main__":
